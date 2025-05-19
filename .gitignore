@@ -46,8 +46,5 @@ docs/
 po/*~
 
 # RStudio Connect folder
-<<<<<<< HEAD
 Data/US_Monthly_Air_Passengers00_19.csv
-=======
-rsconnect/
->>>>>>> cfa3a2fb3fc02a689a1c1fdf2b699fe41ed3c73a
+AirPassenger.Rproj
