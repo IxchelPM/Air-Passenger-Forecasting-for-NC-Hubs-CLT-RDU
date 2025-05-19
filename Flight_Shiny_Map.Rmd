@@ -1,0 +1,138 @@
+---
+title: "Interactive Map Flight Traffic in Rshiny"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+**Reading our data sets**
+```{r}
+from_cha_ral <- read.csv("Data/from_char_raleigh.csv")
+to_cha_ral <- read.csv("Data/to_char_raleigh.csv")
+```
+
+**Libraries required**
+```{r}
+#install.packages("shiny")
+#install.packages("leaflet")
+library(shiny)
+library(leaflet)
+library(dplyr)
+library(sf)
+library(scales)
+```
+
+**Creating the sf objects base on our dataframes**
+```{r}
+from_cha_ral_sf <- st_as_sf(from_cha_ral, coords = c("lon", "lat"), 
+                            crs = 4326, remove = TRUE)
+to_cha_ral_sf <- st_as_sf(to_cha_ral, coords = c("lon", "lat"), 
+                          crs = 4326, remove = TRUE)
+```
+
+**Function for the radio normalization (diameter base on sum of passenger total)**
+```{r}
+normalize_radius <- function(x) {
+  scales::rescale(x, to = c(2, 20), from = c(500, 50000))
+}
+```
+
+**Defining the User Interface**
+```{r}
+ui <- fluidPage(
+  titlePanel("Interactive Air Traffic Maps with OpenStreetMap"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("direction", "Choose Map View:",
+                  choices = c("To Charlotte/Raleigh", "From Charlotte/Raleigh")),
+      selectInput("year", "Select Year:", choices = unique(c("All" = "All", sort(to_cha_ral_sf$year)))),
+      selectInput("month", "Select Month:", choices = unique(c("All" = "All", sort(to_cha_ral_sf$month)))),
+      selectInput("carrier", "Select Airline:", choices = unique(c("All" = "All", sort(to_cha_ral_sf$carrier_name))))
+    ),
+    mainPanel(
+      leafletOutput("trafficMap")
+    )
+  )
+)
+```
+
+**Server Function Definition and Reactive Data Handling**
+```{r}
+server <- function(input, output, session) {
+  # Reactive expression to filter data based on user input
+  filtered_data <- reactive({
+    # Select dataset based on direction
+    if (input$direction == "To Charlotte/Raleigh") {
+      data_sf <- to_cha_ral_sf
+      domain <- unique(to_cha_ral_sf$dest_city_name)  # Destinations in 'to' dataset
+    } else {
+      data_sf <- from_cha_ral_sf
+      domain <- unique(from_cha_ral_sf$origin_city_name)  # Origins in 'from' dataset
+    }
+    
+    # Filter data by year
+    if (input$year != "All") {
+      data_sf <- data_sf %>% filter(year == as.numeric(input$year))
+    }
+    
+    # Filter data by month
+    if (input$month != "All") {
+      data_sf <- data_sf %>% filter(month == as.numeric(input$month))
+    }
+    
+    # Filter data by carrier
+    if (input$carrier != "All") {
+      data_sf <- data_sf %>% filter(carrier_name == input$carrier)
+    }
+    
+    list(data_sf = data_sf, domain = domain)
+  })
+ 
+  output$trafficMap <- renderLeaflet({
+    data_info <- filtered_data()  # Use reactive data
+    data_sf <- data_info$data_sf
+    domain <- data_info$domain
+ 
+    # Initialize the leaflet map
+    map <- leaflet(data_sf) %>%
+      addTiles() %>%
+      setView(lng = -80, lat = 35, zoom = 6)
+ 
+    # Define color palette
+    color_pal <- colorFactor(palette = c("blue4", "red3"), domain = domain)
+ 
+    # Check if there are rows to plot
+    if (nrow(data_sf) > 0) {
+      map %>%
+        addCircleMarkers(
+          lng = ~st_coordinates(geometry)[,1],
+          lat = ~st_coordinates(geometry)[,2],
+          color = ~if (input$direction == "To Charlotte/Raleigh") {
+                        color_pal(dest_city_name)
+                  } else { color_pal(origin_city_name)
+                  },
+          radius = ~normalize_radius(sum_passengers),
+          popup = ~paste(
+               if (input$direction == "To Charlotte/Raleigh") {
+                 paste("<br>Going to:", dest_city_name, "<br>From:", origin_city_name)
+               } else {
+                 paste("<br>Going to:", dest_city_name, "<br>From:", origin_city_name)
+               },
+               "<br>Passengers:", sum_passengers),
+          fillOpacity = 0.8,
+          stroke = FALSE
+        )
+    } else {
+      map  # Return the map as is if no data
+    }
+  })
+}
+
+```
+
+**Shiny application run code**
+```{r}
+shinyApp(ui = ui, server = server)
+```
+

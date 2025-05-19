@@ -1,0 +1,810 @@
+---
+title: "Flight Traffic Forecasting"
+output:
+  html_document:
+    df_print: paged
+---
+
+### EXPLORATORY DATA ANALYSIS
+
+```{r}
+library(dplyr)
+library(fpp2)
+library(ggplot2)
+library(urca)
+```
+
+```{r}
+data <- read.csv("Data/US_Monthly_Air_Passengers00_19.csv")
+```
+
+```{r}
+names(data) <- tolower(names(data))
+colnames(data)
+```
+
+```{r}
+dataus <- subset(data, origin_country == "US")
+datausd <- subset(dataus, dest_country == "US")
+nc <- subset(datausd, origin_state_abr == "NC" | dest_state_abr == "NC")
+colnames(nc)
+```
+```{r}
+dim(nc)
+```
+**Checking the cumulative percentage for the total of passenger on North Carolina to determine which cities to focus on**
+```{r}
+# Calculate total passengers for each city
+city_passengers <- nc %>%
+  group_by(city = ifelse(origin_state_abr == "NC", origin_city_name, dest_city_name)) %>%
+  summarise(total_passengers = sum(sum_passengers)) %>%
+  arrange(desc(total_passengers))
+
+# Calculate cumulative percentage of passengers
+city_passengers <- city_passengers %>%
+  mutate(cumulative_percent = cumsum(total_passengers) / sum(total_passengers))
+
+head(city_passengers)
+```
+We can see that Charlotte and Raleigh make up over 91.7% of the passengers in North Carolina.
+
+**Filtering to only include Charlotte and Raleigh.**
+```{r}
+df <- subset(nc, origin_city_name == "Raleigh/Durham, NC" | origin_city_name == "Charlotte, NC" | dest_city_name == "Raleigh/Durham, NC" | dest_city_name == "Charlotte, NC")
+dim(df)
+```
+217,683 flights.
+
+**Checking missing values**
+```{r}
+missing_values <- colSums(is.na(df))
+print(missing_values)
+```
+There are no relevant missing values in the data. Just 5 for airline_id, and is not going to affect our ts object.
+
+## Data Visualizations for our EDA
+
+**Top 15 Carriers by Number of Flights**
+
+```{r}
+top_carriers <- df %>%
+  group_by(carrier_name) %>%
+  summarise(number_of_flights = n()) %>%
+  top_n(15, number_of_flights)
+
+top_carriers <- top_carriers[order(-top_carriers$number_of_flights), ]
+
+ggplot(top_carriers, aes(x = reorder(carrier_name, -number_of_flights), y = number_of_flights, fill = number_of_flights)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "lightblue", high = "blue") + # Gradient from light to dark blue
+  scale_y_continuous(breaks = seq(0, max(top_carriers$number_of_flights), by = 2000)) + # Custom y-axis breaks
+  xlab("Carrier Name") +
+  ylab("Number of Flights") +
+  ggtitle("Top 15 Carriers by Number of Flights") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.major = element_line(color = "gray", linetype = "dashed"), # Add dashed major grid lines
+        panel.grid.minor = element_blank(), # Remove minor grid lines to reduce clutter
+        panel.background = element_blank(), # Remove panel background
+        panel.border = element_rect(color = "black", fill = NA)) + # Add border around the plot
+  labs(fill = "Total Flights")
+
+```
+
+**Top 15 Destinations by Number of Flights**
+```{r}
+top_destinations <- df %>%
+  group_by(dest_city_name) %>%
+  summarise(number_of_flights = n()) %>%
+  top_n(15, number_of_flights)
+
+top_destinations <- top_destinations[order(-top_destinations$number_of_flights), ]
+
+ggplot(top_destinations, aes(x = reorder(dest_city_name, -number_of_flights), y = number_of_flights),
+       fill = dest_city_name) +
+  geom_bar(stat = "identity") +
+  xlab("Destination City Name") +
+  ylab("Number of Flights") +
+  ggtitle("Top 15 Destinations by Number of Flights") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.major = element_line(color = "gray", linetype = "dashed"), # Add dashed major grid lines
+        panel.grid.minor = element_blank(), # Remove minor grid lines to reduce clutter
+        panel.background = element_blank(), # Remove panel background
+        panel.border = element_rect(color = "black", fill = NA))  # Add border around the plot
+```
+Since our top destinations are Charlotte, NC and Raleigh/Durham, NC, we decide to visualize the top destinations with origin_city Charlotte, NC or Raleigh/Durham, NC
+
+**Top 15 Destinations by Number of Flights for Charlotte, NC and Raleigh/Durham, NC**
+
+```{r}
+library(gridExtra)
+
+# Prepare data for Charlotte, NC
+top_destinations_charlotte <- df %>%
+  filter(origin_city_name == "Charlotte, NC") %>%
+  group_by(dest_city_name) %>%
+  summarise(number_of_flights = n()) %>%
+  top_n(15, number_of_flights) %>%
+  arrange(desc(number_of_flights))
+
+# Prepare data for Raleigh/Durham, NC
+top_destinations_raleigh <- df %>%
+  filter(origin_city_name == "Raleigh/Durham, NC") %>%
+  group_by(dest_city_name) %>%
+  summarise(number_of_flights = n()) %>%
+  top_n(15, number_of_flights) %>%
+  arrange(desc(number_of_flights))
+
+# Identify common destinations
+common_destinations <- intersect(top_destinations_charlotte$dest_city_name, top_destinations_raleigh$dest_city_name)
+
+# Plot for Charlotte with conditional coloring
+plot_charlotte <- ggplot(top_destinations_charlotte, aes(x = reorder(dest_city_name, -number_of_flights), y = number_of_flights, fill = dest_city_name %in% common_destinations)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("TRUE" = "blue4", "FALSE" = "gray")) +
+  xlab("Destination City Name") +
+  ylab("Number of Flights") +
+  ggtitle("Top 15 Destinations from Charlotte, NC") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),  # Smaller tick labels on the x-axis
+        axis.text.y = element_text(size = 9),  # Smaller tick labels on the y-axis
+        plot.title = element_text(size = 10),   # Smaller plot title
+        legend.position = "none")
+
+# Plot for Raleigh/Durham with conditional coloring
+plot_raleigh <- ggplot(top_destinations_raleigh, aes(x = reorder(dest_city_name, -number_of_flights), y = number_of_flights, fill = dest_city_name %in% common_destinations)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("TRUE" = "red3", "FALSE" = "gray")) +
+  xlab("Destination City Name") +
+  ylab("Number of Flights") +
+  ggtitle("Top 15 Destinations from Raleigh/Durham, NC") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),  # Smaller tick labels on the x-axis
+        axis.text.y = element_text(size = 9),  # Smaller tick labels on the y-axis
+        plot.title = element_text(size = 10),   # Smaller plot title
+        legend.position = "none")
+
+# Combine both plots in a grid layout
+grid.arrange(plot_charlotte, plot_raleigh, ncol = 2)
+
+```
+
+**Monthly Passenger Traffic Heatmap by Year**
+
+```{r}
+heatmap_data <- df %>%
+  group_by(year, month) %>%
+  summarise(sum_passengers = sum(sum_passengers, na.rm = TRUE), .groups = 'drop')
+```
+
+```{r}
+# Create the heatmap
+ggplot(heatmap_data, aes(x = factor(month), y = factor(year), fill = sum_passengers)) +
+  geom_tile(color = "white") +  # Adds the tiles for the heatmap
+  scale_fill_gradient(low = "yellow", high = "purple", name = "Sum Passengers") +  # Color gradient
+  labs(title = "Monthly Passenger Traffic Heatmap by Year", x = "Month", y = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Improve x-axis labels visibility
+
+```
+### FORECASTING
+
+##Creating the time series object
+
+**Checking if there any months no register in a year**
+```{r}
+# Group by year and summarize to count unique months per year
+monthly_data_check <- df %>%
+  group_by(year) %>%
+  summarise(month_count = n_distinct(month)) %>%
+  mutate(full_year_data = if_else(month_count == 12, "Yes", "No"))
+ 
+# View the results
+print(monthly_data_check)
+```
+Notice that all years have the 12 months.
+
+**time series object**
+```{r}
+# Aggregate data to monthly frequency
+monthly_df <- df %>%
+  group_by(year, month) %>%
+  summarize(sum_passengers = sum(sum_passengers), .groups = 'drop')
+
+# Create time series object
+ts_df <- ts(monthly_df$sum_passengers, 
+    start = c(min(monthly_df$year), 
+    min(monthly_df$month)), 
+    frequency = 12)
+```
+
+**Visualizing the ts_df, Monthly Total of Passengers **
+```{r}
+autoplot(ts_df) +
+  xlab("Year") +
+  ylab("Total of Passengers") +
+  ggtitle("Monthly total of Passengers") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**Train test split, 90% data is for train**
+```{r}
+N <- length(ts_df)
+train_ratio <- 0.9
+T <- floor(train_ratio*N)
+S <- N - T
+train <- head(ts_df, T)
+test <- tail(ts_df, S)
+```
+
+**Visualizing the Train test split**
+```{r}
+autoplot(train) +
+  autolayer(test, series = "Test Set") +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("Train Test Split") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+##Checking the seasonality of our ts object
+```{r}
+ggseasonplot(train)
+```
+##Performing a decomposition
+Our goal is to understand the underlying components of our train set ts object.
+
+```{r}
+train_stl <- stl(train, s.window = "periodic", t.window = 12)
+autoplot(train_stl)
+```
+##Box.Cox Transform
+
+We want to pick the lambda that stabilizes the variance the best for apply the box-cox transform with la first in our forecast functions.
+```{r}
+la <- BoxCox.lambda(train)
+la
+```
+## Forecasting with different methods
+
+#Naive forecast
+```{r}
+naive_forecast <- naive(train, lambda=la, h = S)
+accuracy(naive_forecast, test)  
+naive_rmse <- accuracy(naive_forecast, test)["Test set", "RMSE"]
+```
+
+#Seasonal Naive forecast
+```{r}
+snaive_forecast <- snaive(train, lambda=la, h = S)
+accuracy(snaive_forecast, test) 
+snaive_rmse <- accuracy(snaive_forecast, test)["Test set", "RMSE"]
+```
+
+#Drift forecast
+```{r}
+drift_forecast <- rwf(train, lambda=la, drift = TRUE, h = S)
+accuracy(drift_forecast, test)
+drift_rmse <- accuracy(drift_forecast, test)["Test set", "RMSE"]
+```
+
+#Average forecast
+```{r}
+mean_forecast <- meanf(train, lambda=la, h = S)
+accuracy(mean_forecast, test)
+mean_rmse <- accuracy(mean_forecast, test)["Test set", "RMSE"]
+```
+#Holt-winters
+
+```{r}
+hw_forecast <- hw(train, lambda=la, h = S)
+accuracy(hw_forecast, test)
+mean_rmse <- accuracy(hw_forecast, test)["Test set", "RMSE"]
+```
+
+#Selecting the best ETS model
+
+```{r}
+tr_best_ets <- ets(train, model = "ZZZ", ic = c("aicc", "aic", "bic"), lambda=la)
+```
+
+```{r}
+summary(tr_best_ets)
+```
+
+ETS model and testing set accuracy
+```{r}
+ets_forecast <- forecast(tr_best_ets, h = S)
+accuracy(ets_forecast, test)
+ets_rmse <- accuracy(ets_forecast, test)["Test set", "RMSE"]
+```
+Visualizing Best ETS Forecast
+```{r}
+autoplot(train) +  # windowing so we can see the prediction more clearly
+  autolayer(ets_forecast, series = "ETS(A, A, A)", PI = F) +
+  autolayer(test, series = "Test Set") +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("Best ETS Model Forecast") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+In the plot we can see that the forecast has a similar pattern to our test set.
+
+#ARIMA models
+
+*Checking if the data is stationary**
+Base on observation the times series is clearly not stationary, let's check statistically.
+
+```{r}
+summary(ur.kpss(train))
+```
+Since the value of test statistic 4.1306 > 0.463 the value under 5% means this ts is NOT stationary.
+
+**Turning our times series stationary**
+
+Checking how many seasonal differencing are need in order to make a time series stationary.
+```{r}
+nsdiffs(log(train))
+```
+We run a kpss test on the seasonally differenced series.
+```{r}
+kpss_results <- ur.kpss(diff(train, lag=frequency(train)))
+summary(kpss_results)
+```
+Since the value of test statistic  0.1466 < 0.463 the value under 5% means this ts is stationary after the first seasonal differencing.
+
+
+```{r}
+ggtsdisplay(diff(train, lag = frequency(train)))
+```
+
+ACF Plot (Bottom Left Panel):
+There are significant autocorrelations at initial lags (notably at lag 1 through 7), which gradually decay, indicating a possible AR (autoregressive) process.
+A notable spike at lag 12 suggests a potential yearly seasonal effect, as this autocorrelation persists over a significant period.
+
+PACF Plot (Bottom Right Panel):
+A significant spike at lag 1 indicates a strong AR(1) component is likely present in the data.
+Spikes at lags 12 and 24 suggest seasonal effects that may require a seasonal ARIMA model to account for yearly patterns observed at consistent intervals.
+
+Based on these findings, the data likely requires a Seasonal ARIMA model that includes non-seasonal AR(1) terms and additional seasonal terms to adequately model the observed 
+
+#AUTO ARIMA MODELS
+
+**ARIMA 1:**
+
+We use auto.arima() to pick the best one among all arima models with variations in the penalty.
+
+```{r}
+arima1 <- auto.arima(train, lambda=la, seasonal = TRUE, ic="aic", stepwise = FALSE, d=0, D=1)
+arima1
+```
+The model captures both non-seasonal and seasonal dynamics in the data, adjusting for trends (via drift) and transforming the series to stabilize variance.
+The coefficients' significance suggests that the lags and error terms selected are important in explaining the variability in the data.
+
+```{r}
+arima_forecast <- forecast(arima1, h = S)
+accuracy(arima_forecast, test)
+arima1_rmse <- accuracy(arima_forecast, test)["Test set", "RMSE"]
+```
+Indeed, the auto.arima function chose the AR model with the seasonal component.
+
+```{r}
+autoplot(train) + 
+  autolayer(arima_forecast, series = "ARIMA Forecast", PI=F) +
+  autolayer(test, series = "Test Set") +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("ARIMA(1,0,1)(2,1,1)[12] with drift ") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+**ARIMA 2:**
+Changing the ic criterion and using a the approximation to FALSE, forcing the function to use a slower but more accurate fitting method.
+
+```{r}
+arima2 <- auto.arima(train, lambda=la, seasonal = TRUE, ic="bic", stepwise = FALSE,
+                     d=0, D=1, approximation = FALSE)
+arima2
+```
+
+```{r}
+arima2_forecast <- forecast(arima2, h = S)
+accuracy(arima2_forecast, test)
+arima2_rmse <- accuracy(arima2_forecast, test)["Test set", "RMSE"]
+```
+
+```{r}
+autoplot(train) + 
+  autolayer(arima2_forecast, series = "ARIMA Forecast", PI=F) +
+  autolayer(test, series = "Test Set") +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("ARIMA(1,0,1)(0,1,1)[12] with drift ic = bic and approximation = F") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+# Choosing a final model for Forecasting
+```{r}
+rmses <- data.frame(mean_rmse, naive_rmse, snaive_rmse, drift_rmse, ets_rmse, arima1_rmse, arima2_rmse)
+rmses
+```
+
+The first arima model has the lowest testing RMSE. The candidates are:
+1. arima1
+2. arima2
+3. ets
+
+Let's see all the models in a plot
+
+```{r}
+autoplot(window(train, start = c(2017,1))) +
+  autolayer(naive_forecast, series = "Naive", PI = F) +
+  autolayer(snaive_forecast, series = "Seasonal Naive", PI = F) +
+  autolayer(drift_forecast, series = "Drift", PI = F) +
+  autolayer(mean_forecast, series = "Average", PI = F) +
+  autolayer(hw_forecast, series = "Holt winters", PI = F) +
+  autolayer(ets_forecast, series = "Best ETS", PI = F) +
+  autolayer(arima_forecast, series = "ARIMA1", PI = F) +  
+  autolayer(arima2_forecast, series = "ARIMA2", PI = F) + 
+  autolayer(test, series = "testing")+
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("Forecast Model Comparison zoom from January 2017") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+#Checking residuals of these models
+
+```{r}
+L <- min(ceiling(T/5), 2*frequency(train))
+```
+
+```{r}
+checkresiduals(arima1, lag = L)
+```
+
+
+```{r}
+checkresiduals(arima2, lag = L)
+```
+
+```{r}
+checkresiduals(tr_best_ets, lag = L)
+```
+#Cross validation in our models
+```{r}
+arima1_cv <- function(y, h) {
+  # Fit an ARIMA model to the data segment 'y'
+  model <- Arima(y, order = c(1, 0, 1), seasonal = c(2, 1, 1))
+  # Return the forecast over a horizon 'h'
+  return(forecast(model, h = h))
+}
+
+# Perform cross-validation
+arima1_cv_results <- tsCV(ts_df, arima1_cv, h = S)
+
+# Calculate RMSE from the cross-validation results
+arima1_cv_rmse <- sqrt(mean(arima1_cv_results^2, na.rm = TRUE))
+
+```
+
+```{r}
+arima2_cv <- function(y, h) {
+  # Fit an ARIMA model to the data segment 'y'
+  model <- Arima(y, order = c(1, 0, 1), seasonal = c(0, 1, 1))
+  # Return the forecast over a horizon 'h'
+  return(forecast(model, h = h))
+}
+
+# Perform cross-validation
+arima2_cv_results <- tsCV(ts_df, arima2_cv, h = S)
+
+# Calculate RMSE from the cross-validation results
+arima2_cv_rmse <- sqrt(mean(arima2_cv_results^2, na.rm = TRUE))
+
+```
+
+```{r}
+ets_cv <- function(y, h){
+  model <- ets(y, model="AAA")
+  return(forecast(model, h = h))
+}
+
+ets_cv_results <- tsCV(ts_df, ets_cv, h = S)
+ets_cv_rmse <- sqrt(mean(ets_cv_results^2, na.rm = TRUE))
+```
+
+```{r}
+cv_rmses <- data.frame(arima1_cv_rmse, arima2_cv_rmse, ets_cv_rmse)
+cv_rmses
+```
+##MODEL SELECTED
+
+**arima1 is the model selected, base on:**
+
+-Alignment with Course Methods:
+ARIMA1 uses default settings like approximation=TRUE, aligning with methodologies taught in class.
+
+-Good In-Sample Performance:
+ARIMA1 shows superior in-sample RMSE, indicating a better fit to training data.
+
+-Competitive Cross-Validation Performance:
+Though ARIMA1's cross-validation RMSE is slightly higher than ARIMA2's, the difference is minimal.
+This closeness in performance suggests that ARIMA1 generalizes adequately to unseen data.
+
+-Practicality and Computational Efficiency:
+The use of approximation=TRUE speeds up the model fitting process, especially beneficial for large datasets.This approach reduces computational demands without substantially compromising accuracy.
+
+
+```{r}
+autoplot(train) + 
+  autolayer(forecast(arima1, h = S), series = "ARIMA(1,0,1)(2,1,1)[12] with drift", PI = F) +
+  autolayer(test, series = "Test Set") +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("Final Model Forecast comparing with the Test set") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+### Forecasting 2020 data
+```{r}
+# Fit the ARIMA model
+arima_final <- Arima(ts_df, order=c(1,0,1), seasonal=c(2,1,1), include.drift=TRUE, lambda=la)
+
+# Generate forecasts for the first half of 2020
+future_forecast <- forecast(arima_final, h=6)
+
+# Plotting the forecast along with the training data
+# Since there is no actual test data for 2020, we only plot the forecast
+autoplot(ts_df) +
+  autolayer(future_forecast, series = "Forecast for First Half of 2020", PI = FALSE) +
+  xlab("Year") +
+  ylab("Number of Passengers") +
+  ggtitle("Forecast for the First Half of 2020") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+```{r}
+forecast_table <- data.frame(
+  Month = seq(as.Date("2020-01-01"), by = "month", length.out = 6),
+  Forecasted_Passengers = round(future_forecast$mean),
+  Lower_95 = round(future_forecast$lower[,2]),
+  Upper_95 = round(future_forecast$upper[,2])
+)
+
+print(forecast_table)
+
+
+```
+
+The ARIMA model specified is \(ARIMA(1,0,1)(2,1,1)[12]\) with drift. A Box Cox transformation is applied with \( \lambda = 1.127672 \).
+
+**Selected Model Equation**
+
+\[
+\Delta^{1} \Delta_{12}^{1} y_t' = \epsilon_t + 0.8711 \Delta y_{t-1}' - 0.3289 \epsilon_{t-1} + 0.0403 \Delta_{12} y_{t-12}' - 0.0508 \Delta_{12} y_{t-24}' - 0.7172 \epsilon_{t-12} + 69592.891 \cdot t
+\]
+
+- \( y_t' \) represents the Box Cox transformed series.
+- \( \Delta y_t' \) and \( \Delta_{12} y_t' \) denote the first non-seasonal and first seasonal differences, respectively.
+- \( \epsilon_t \) is the error term.
+- AR, MA, and SAR coefficients are given by 0.8711, -0.3289, 0.0403, -0.0508, and -0.7172 respectively.
+- The drift coefficient is 69592.891, indicating a significant linear trend.
+- The model fits the data with an AIC of 6159.57, suggesting its relative quality given the data and specified complexity.
+
+
+### SPATIAL ANALYSIS
+
+#Creating a new data frame just for take the geolocations
+```{r}
+#city_names <- df %>%
+#  select(origin_city_name, dest_city_name) %>%
+#  unlist() %>%
+#  unique()
+
+# Create a new dataframe with the unique city names
+#new_df <- data.frame(city_name = city_names)
+
+# Print the new dataframe to see the result
+#print(new_df)
+```
+
+#Using API google maps to take the geolocations
+
+```{r}
+#install.packages("ggmap")
+#library(ggmap)
+```
+
+```{r}
+#register_google(key = "Replace Here")
+```
+
+```{r}
+# Geocode each city to find latitude and longitude
+#new_df$city_name <- as.character(new_df$city_name)
+#coords <- geocode(new_df$city_name, output = "latlona", source = "google")
+
+# Check for any geocoding errors
+#if (any(is.na(coords$lon) | is.na(coords$lat))) {
+#  warning("Some coordinates were not found")
+#}
+
+# Add coordinates to the original dataframe
+#new_df <- bind_cols(new_df, coords[, c("lon", "lat")])
+```
+
+```{r}
+#new_df
+```
+
+#Writing the data frame with geocodes that is no necessary another call of the API google
+```{r}
+# Write the new_df to a CSV file in the Data folder
+#write.csv(new_df, "Data/geocodes_df.csv", row.names = FALSE)
+```
+
+```{r}
+geocodes <- read.csv("Data/geocodes_df.csv")
+```
+
+Pasting geolocations in our data set, the data is divided in 2 data set base on if the flights are coming from or going to Charlotte, NC or Raleigh/Durham, NC.
+
+```{r}
+colnames(geocodes)
+```
+
+```{r}
+# Flights originating from Charlotte or Raleigh
+flights_from_char_raleigh <- df %>% 
+  filter(origin_city_name %in% c("Charlotte, NC", "Raleigh/Durham, NC"))
+
+# Flights destined for Charlotte or Raleigh
+flights_to_char_raleigh <- df %>% 
+  filter(dest_city_name %in% c("Charlotte, NC", "Raleigh/Durham, NC"))
+```
+
+```{r}
+flights_from_char_raleigh <- flights_from_char_raleigh %>%
+  left_join(geocodes, by = c("dest_city_name" = "city_name"))
+
+flights_to_char_raleigh <- flights_to_char_raleigh %>%
+  left_join(geocodes, by = c("origin_city_name" = "city_name"))
+```
+
+*Checking Final Data sets for create the map.*
+
+```{r}
+colnames(flights_from_char_raleigh)
+colnames(flights_to_char_raleigh)
+```
+
+```{r}
+# Checking NaN values in specific longitude and latitude columns
+missing_from_lo <- sum(is.na(flights_from_char_raleigh$lon))
+missing_from_la <- sum(is.na(flights_from_char_raleigh$lat))
+missing_to_lo <- sum(is.na(flights_to_char_raleigh$lon))
+missing_to_la <- sum(is.na(flights_to_char_raleigh$lat))
+
+# Print the number of missing values for each column
+cat("Missing values from Charlotte and Raleigh: ", missing_from_lo, "\n")
+cat("Missing values from Charlotte and Raleigh: ", missing_from_la, "\n")
+cat("Missing values to Charlotte and Raleigh: ", missing_to_lo, "\n")
+cat("Missing values to Charlotte and Raleigh: ", missing_to_la, "\n")
+```
+
+Write the data frames to CSV file in the Data folder to make interactive map in shiny
+
+```{r}
+#write.csv(flights_from_char_raleigh, "Data/from_char_raleigh.csv", row.names = FALSE)
+#write.csv(flights_to_char_raleigh, "Data/to_char_raleigh.csv", row.names = FALSE)
+```
+
+*Creating sf objects for future plots*
+
+```{r}
+#install.packages("sf")
+library(sf)
+```
+
+```{r}
+usa_sf <- st_read("Data/sf/cb_2018_us_state_5m.shp")
+```
+
+
+```{r}
+# Create an sf object for flights coming from Charlotte, NC or Raleigh/Durham, NC
+flights_from_char_ral_sf <- st_as_sf(flights_from_char_raleigh, coords = c("lon", "lat"),
+                              crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+# Create an sf object for flights going to Charlotte, NC or Raleigh/Durham, NC
+flights_to_char_ral_sf <- st_as_sf(flights_to_char_raleigh, coords = c("lon", "lat"), 
+                            crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+```
+
+##Maps
+
+```{r}
+ggplot() +
+  geom_sf(data = usa_sf, fill = "white", color = "gray") + 
+  geom_sf(data = flights_to_char_ral_sf, aes(color = dest_city_name, size = sum_passengers)) +
+  scale_color_manual(values = c("Charlotte, NC" = "blue4", "Raleigh/Durham, NC" = "red3")) +
+  scale_size(range = c(0.5, 3), breaks = c(500, 5000, 50000), labels = c("500", "5K", "50K")) +
+  labs(title = "Flight Traffic from other cities to Charlotte and Raleigh, NC") +
+  coord_sf(xlim = c(-160, -60), ylim = c(10, 70))
+```
+  
+
+```{r}
+flight_counts <- table(flights_to_char_ral_sf$origin_state_abr)
+flight_counts
+```
+```{r}
+usa_sf2 <- st_read("Data/sf/cb_2018_us_state_5m.shp")
+```
+
+
+```{r}
+# Convert the flight_counts table to a data frame for easier merging
+flight_counts_df <- as.data.frame(flight_counts)
+names(flight_counts_df) <- c("STUSPS", "flightCounts")
+
+# Merge with the spatial data frame
+usa_sf2 <- merge(usa_sf2, flight_counts_df, by = "STUSPS", all.x = TRUE)
+
+# Replace NA values with 0 in flightCounts if any state has no flights
+usa_sf2$flightCounts[is.na(usa_sf2$flightCounts)] <- 0
+
+```
+
+```{r}
+# Plot using geom_sf
+ggplot(data = usa_sf2) +
+  geom_sf(aes(fill = flightCounts)) +
+  scale_fill_gradient(low = "white", high = "green4", na.value = "grey", name = "Flight Counts") +
+  labs(title = "Flight Counts to Charlotte and Raleigh per state", fill = "Flight Counts") + 
+  coord_sf(xlim = c(-130, -60), ylim = c(20, 60))+
+  theme_minimal()
+
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = usa_sf, fill = "white", color = "gray") + 
+  geom_sf(data = flights_from_char_ral_sf, aes(color = origin_city_name, size = sum_passengers)) +
+  scale_color_manual(values = c("Charlotte, NC" = "blue4", "Raleigh/Durham, NC" = "red3")) +
+  scale_size(range = c(0.5, 3), breaks = c(500, 5000, 50000), labels = c("500", "5K", "50K")) +
+  labs(title = "Flight Traffic from Charlotte and Raleigh, NC to other cities") +
+  coord_sf(xlim = c(-160, -60), ylim = c(10, 70))
+```
+
+
+```{r}
+flight_counts2 <- table(flights_from_char_ral_sf$dest_state_abr)
+flight_counts2
+```
+
+
+```{r}
+usa_sf3 <- st_read("Data/sf/cb_2018_us_state_5m.shp")
+```
+
+
+```{r}
+# Convert the flight_counts table to a data frame for easier merging
+flight_counts_df2 <- as.data.frame(flight_counts2)
+names(flight_counts_df2) <- c("STUSPS", "flightCounts2")
+
+# Merge with the spatial data frame
+usa_sf3 <- merge(usa_sf3, flight_counts_df2, by = "STUSPS", all.x = TRUE)
+
+# Replace NA values with 0 in flightCounts if any state has no flights
+usa_sf3$flightCounts2[is.na(usa_sf3$flightCounts2)] <- 0
+```
+
+```{r}
+# Plot using geom_sf
+ggplot(data = usa_sf3) +
+  geom_sf(aes(fill = flightCounts2)) +
+  scale_fill_gradient(low = "white", high = "green4", na.value = "grey", name = "Flight Counts") +
+  labs(title = "Flight Counts from Charlotte and Raleigh per state", fill = "Flight Counts") + 
+  coord_sf(xlim = c(-130, -60), ylim = c(20, 60))+
+  theme_minimal()
+```
+
+
