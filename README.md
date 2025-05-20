@@ -2,8 +2,6 @@
 
 This project forecasts total airline passengers traveling through **Charlotte** and **Raleigh-Durham**, North Carolina’s top two air hubs, using time series methods in **R**. The analysis spans **January 2000 to December 2019**, with forecasts extending to **June 2020**.
 
----
-
 ## Overview
 
 - **Objective**: Predict monthly airline passenger volume using historical data.
@@ -13,8 +11,6 @@ This project forecasts total airline passengers traveling through **Charlotte** 
 - **Language**: R
 - **Techniques**: ETS, ARIMA, spatial mapping, Shiny dashboard
 
----
-
 ## Data Source & Processing
 
 - **Source**: U.S. Monthly Air Passenger Data (2000–2019)
@@ -23,8 +19,6 @@ This project forecasts total airline passengers traveling through **Charlotte** 
   - Aggregated monthly passenger counts
   - Top 2 cities selected based on volume
 - **Geolocation**: Used Google Maps API to get lat/lon for destinations
-
----
 
 ## Methods
 
@@ -45,8 +39,6 @@ This project forecasts total airline passengers traveling through **Charlotte** 
     - RMSE comparison
     - Cross-validation
 
----
-
 ## Final Model
 
 - **Selected**: ARIMA(1,0,1)(2,1,1)[12] with drift
@@ -55,7 +47,6 @@ This project forecasts total airline passengers traveling through **Charlotte** 
   - White noise residuals
   - Captured trend and seasonality
 
----
 
 ## Spatial & Visual Analysis
 - **Visuals**:
@@ -63,7 +54,6 @@ This project forecasts total airline passengers traveling through **Charlotte** 
   - STL decomposition plots
   - Bar charts, ACF/PACF, forecast plots
 
----
 
 ## Requirements
 
